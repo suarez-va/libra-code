@@ -374,8 +374,13 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
     # ============ Bath update =====================
     gamma_matsubara = complexList()
     c_matsubara = complexList()
+    # TEMPORARY TESTING REMOVE
+    gamma_matsubara.append(0.12499999998702199+0.21650635098820767j); c_matsubara.append(6.89727535253272+3.446096981579184j)
+    gamma_matsubara.append(0.12499999999048778-0.21650635099998045j); c_matsubara.append(5.165224544962427-3.4460969815780973j)
+    gamma_matsubara.append(6.293374726730796-6.819148639665597e-08j); c_matsubara.append(-0.0015203856623265436+4.57291366716115e-11j)
+    # TEMPORARY TESTING REMOVE
 
-    setup_bath(KK, params["eta"], params["gamma"], params["temperature"], gamma_matsubara, c_matsubara)
+    #setup_bath(KK, params["eta"], params["gamma"], params["temperature"], gamma_matsubara, c_matsubara)
     params.update({"gamma_matsubara": gamma_matsubara, "c_matsubara": c_matsubara})
 
     if params["verbosity"] >= 1:
