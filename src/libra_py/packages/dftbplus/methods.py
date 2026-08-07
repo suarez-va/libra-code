@@ -32,6 +32,7 @@ from libra_py import regexlib as rgl
 import libra_py.citools.ci as ci
 from libra_py import data_conv
 import libra_py.packages.cp2k.methods as CP2K_methods
+import libra_py.orthogonalizations as ortho
 
 # import numpy as np
 
@@ -1419,6 +1420,114 @@ def check_unity_deviation(A):
     print(f"--- Matrix Deviation Analysis ({n}x{n}) ---")
     print(f"Max Absolute Deviation: {max_dev:.2e}")
 
+
+def read_all_forces(filename):
+    """
+    Read state-resolved force vectors from a text file and assemble them into
+    a NumPy array indexed by electronic state.
+
+    The input file is expected to contain blocks of force data in the form:
+
+        State <state_index>
+        Fx Fy Fz
+        Fx Fy Fz
+        ...
+        State <next_state_index>
+        ...
+
+    Each ``State`` header starts a new block corresponding to one electronic
+    state. The following lines contain Cartesian force components (X, Y, Z)
+    for each atom until the next ``State`` header or end of file.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the input file containing force data.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of force vectors with shape::
+
+            (nstates, 3, natoms)
+
+        where:
+
+        - ``nstates = max_state + 1`` so that array index ``i`` corresponds
+          directly to electronic state ``i``.
+        - axis 0: electronic state index
+        - axis 1: Cartesian component
+          (0 = X, 1 = Y, 2 = Z)
+        - axis 2: atom index
+
+        Force values are stored such that::
+
+            frcs[state, component, atom]
+
+        gives the selected Cartesian force component for a given atom and
+        electronic state.
+
+    Notes
+    -----
+    - States are assumed to be numbered with integer indices.
+    - Missing state indices (if any) remain initialized to zero.
+    - All states are assumed to contain the same number of atoms.
+    """
+
+    frcs_dict = {}
+    max_state = 0
+    num_atoms = 0
+
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+
+    line_idx = 0
+    while line_idx < len(lines):
+        line = lines[line_idx].strip()
+        if not line:
+            line_idx += 1
+            continue
+
+        parts = line.split()
+        # Header line: state_i state_j
+        if len(parts) == 2:
+            if parts[0] == "State":
+                si = int(parts[1])
+                max_state = max(max_state, si)
+                
+                coord_block = []
+                line_idx += 1
+
+                # Read vector components
+                while line_idx < len(lines):
+                    sub_parts = lines[line_idx].split()
+                    if len(sub_parts) == 2: # Next state pair reached
+                        break
+                    if len(sub_parts) == 3: # X, Y, Z
+                        coord_block.append([float(x) for x in sub_parts])
+                    line_idx += 1
+
+                frcs_dict[(si)] = np.array(coord_block)
+                num_atoms = len(coord_block)
+                
+            else:
+                line_idx += 1
+        else:
+            line_idx += 1
+            
+    # Array shape: [state_i, dim, atomindex]
+    # We use max_state + 1 so that index 'n' corresponds to state 'n'
+    shape = (max_state + 1, 3, num_atoms)
+    frcs = np.zeros(shape)
+
+    for (si), vectors in frcs_dict.items():
+        # vectors.T converts (Atoms, 3) -> (3, Atoms)
+        # This makes Dim 0-indexed (0=X, 1=Y, 2=Z)
+        # and AtomIndex 0-indexed (0 to N-1)
+        frcs[si, :, :] = vectors.T
+
+    return frcs
+
 def read_nacv(filename):
     """
     Parse a NACV.DAT file and return nonadiabatic coupling vectors (NACVs)
@@ -2101,7 +2210,7 @@ ExcitedState {{
     Casida {{
        Symmetry = {Symmetry}
        NrOfExcitations = {NrOfExcitations}
-       StateOfInterest = {StateOfInterest}
+       #StateOfInterest = {StateOfInterest}
        WriteSPTransitions = {WriteSPTransitions}
        WriteXplusY = {WriteXplusY}
        #WriteXplusYAscii = {WriteXplusYAscii}
@@ -2711,6 +2820,7 @@ def dftb_compute_adi(q, params, full_id):
     params.setdefault("MO_prev", {})
     params.setdefault("data_prev", {})
     params.setdefault("coordinates_prev", {})
+    params.setdefault("s_ci_inv_prev", {})
     params.setdefault("is_first_time", {})
     params.setdefault("act_state", {})
 
@@ -2721,13 +2831,14 @@ def dftb_compute_adi(q, params, full_id):
     dt = float(params.get("dt", 41.0))
     dftb_run_params = params.get("dftb_run_params", {})
     atom_labels = params["atom_labels"]
+    energy_zero = params.get("energy_zero", 0.0 )
 
     wd_prefix = params.get("working_directory_prefix", "wd")
     wd = f"{wd_prefix}_itraj{itraj}"
 
     # ================= Run DFTB+ =================
     dftb_params = copy.deepcopy(dftb_run_params)
-    dftb_params["StateOfInterest"] = act_state
+    #dftb_params["StateOfInterest"] = act_state
 
     #make_dftb_input(dftb_params)
     prms1 = {
@@ -2780,11 +2891,14 @@ def dftb_compute_adi(q, params, full_id):
 
     info, MO_curr, data_curr = read_dftb_orbital_info(read_params)
 
+    #print(info)
+
     # ================= Overlap =================
     ndim = info["nmo"]
     S = read_overlap_matrix(f"{wd}/oversqr.dat", 2 * ndim)
 
     st_ao = S[:ndim, ndim:]
+    s_ao = S[ndim:, ndim:]
 
     # ================= Previous electronic data =================
     if is_first_time:
@@ -2802,8 +2916,12 @@ def dftb_compute_adi(q, params, full_id):
     obj.hvib_adi = CMATRIX(nstates, nstates)
     obj.basis_transform = CMATRIX(nstates, nstates)
     obj.time_overlap_adi = CMATRIX(nstates, nstates)
+    obj.overlap_adi = CMATRIX(nstates, nstates)
 
     # ================= Compute overlaps =================
+    s_mo_orb = MO_curr.T @ s_ao @ MO_curr
+    s_mo = np.kron(np.eye(2), s_mo_orb)
+
     st_mo_orb = MO_prev.T @ st_ao @ MO_curr
     st_mo = np.kron(np.eye(2), st_mo_orb)
 
@@ -2817,12 +2935,25 @@ def dftb_compute_adi(q, params, full_id):
     }
 
     st_ci = ci.overlap(st_mo, data_prev, data_curr, ovlp_params)
+    s_ci = ci.overlap(s_mo, data_curr, data_curr, ovlp_params)
+    
+    s_ci_inv_curr = ortho.lowdin_inverse_sqrt(s_ci)
+    s_ci_inv_prev = None
+    if is_first_time:
+        s_ci_inv_prev = copy.deepcopy(s_ci_inv_curr)
+    else:
+        s_ci_inv_prev = params["s_ci_inv_prev"].get(itraj, s_ci_inv_curr)
+
+    s_ci = s_ci_inv_curr @ s_ci @ s_ci_inv_curr
+    st_ci = s_ci_inv_prev @ st_ci @ s_ci_inv_curr
+
 
     # ================= Populate Hamiltonian =================
     for i in range(nstates):
-        energy = 0.0 if i == 0 else 0.5 * (
-            data_prev[0][i - 1] + data_curr[0][i - 1]
-        )
+        #energy = 0.0 if i == 0 else 0.5 * (
+        #    data_prev[0][i - 1] + data_curr[0][i - 1]
+        #)
+        energy = 0.0 if i == 0 else data_curr[0][i-1]
 
         obj.ham_adi.set(i, i, energy)
         obj.hvib_adi.set(i, i, energy)
@@ -2830,6 +2961,7 @@ def dftb_compute_adi(q, params, full_id):
 
         for j in range(nstates):
             obj.time_overlap_adi.set(i, j, float(st_ci[i, j]))
+            obj.overlap_adi.set(i,  j, float(s_ci[i,j]) )
 
     # ================== Forces ===============================
     ## autotest.tag
@@ -2840,26 +2972,28 @@ def dftb_compute_adi(q, params, full_id):
     #print(F"results_gs = {results_gs}")
     #print(F"results_ex = {results_ex}")
 
-    forces = None
-    if act_state == 0:
-        forces = results_gs['forces']
-    else:
-        forces = results_ex['forces']
+    #forces = None
+    #if act_state == 0:
+    #    forces = results_gs['forces']
+    #else:
+    #    forces = results_ex['forces']
 
-    e0 = results_gs['mermin_energy']
+    e0 = results_gs['mermin_energy'] - energy_zero
     print(F"GS energy = {e0}")
     for i in range(nstates):
         obj.ham_adi.add(i, i, e0)
-
 
     obj.d1ham_adi = CMATRIXList()
     for idof in range(ndof):
         obj.d1ham_adi.append(CMATRIX(nstates, nstates))
 
-    for iatom in range(nat):
-        obj.d1ham_adi[3 * iatom + 0].set(act_state, act_state, -forces[0, iatom] * (1.0 + 0.0j))
-        obj.d1ham_adi[3 * iatom + 1].set(act_state, act_state, -forces[1, iatom] * (1.0 + 0.0j))
-        obj.d1ham_adi[3 * iatom + 2].set(act_state, act_state, -forces[2, iatom] * (1.0 + 0.0j))
+    if os.path.exists(f"{wd}/FRC.DAT"):
+        forces = read_all_forces(f"{wd}/FRC.DAT")
+        for iatom in range(nat):
+            for i in range(nstates):
+                obj.d1ham_adi[3 * iatom + 0].set(i, i, -forces[i, 0, iatom] * (1.0 + 0.0j))
+                obj.d1ham_adi[3 * iatom + 1].set(i, i, -forces[i, 1, iatom] * (1.0 + 0.0j))
+                obj.d1ham_adi[3 * iatom + 2].set(i, i, -forces[i, 2, iatom] * (1.0 + 0.0j))
 
     # ================= Derivative couplings ====================
     obj.dc1_adi = CMATRIXList()
@@ -2886,6 +3020,7 @@ def dftb_compute_adi(q, params, full_id):
     params["MO_prev"][itraj] = MO_curr.copy()
     params["data_prev"][itraj] = copy.deepcopy(data_curr)
     params["coordinates_prev"][itraj] = coordinates.copy()
+    params["s_ci_inv_prev"][itraj] = copy.deepcopy(s_ci_inv_curr)
     params["is_first_time"][itraj] = False
 
     return obj

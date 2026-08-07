@@ -1,0 +1,69 @@
+name: libra
+
+channels:
+  - conda-forge
+  - psi4/label/dev
+
+dependencies:
+  # -------------------------
+  # Python base
+  # -------------------------
+  - python=3.10
+  - pip
+
+  # -------------------------
+  # Core scientific stack
+  # -------------------------
+  - numpy
+  - scipy
+  - matplotlib
+  - h5py
+
+  # -------------------------
+  # Build tools
+  # -------------------------
+  - cmake=3.24.2
+  - make
+  - conda-build
+
+  # -------------------------
+  # Compilers / runtime
+  # -------------------------
+  - gcc_linux-64=13
+  - gxx_linux-64=13
+  - gfortran_linux-64=13
+  - llvm-openmp
+
+  # -------------------------
+  # Linear algebra / math
+  # -------------------------
+  - boost=1.82
+  - eigen=3.4.*
+  - mpfr
+  - gmp
+
+  # -------------------------
+  # Libra-specific deps
+  # -------------------------
+  - libint2=2.7.1
+  - python-devtools
+
+
+  #--------------------------
+  # Testing
+  #--------------------------
+  - pytest
+
+  #--------------------------
+  # External electronic structure
+  #--------------------------
+  - pyscf
+
+  # -------------------------
+  # Pip section (Python-only packages)
+  # -------------------------
+  - pip:
+      - scikit-learn
+      - torch
+      - torchvision
+      - torchaudio

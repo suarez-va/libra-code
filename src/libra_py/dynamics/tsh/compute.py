@@ -84,6 +84,12 @@ def run_dynamics(dyn_var, _dyn_params, ham, compute_model, _model_params, rnd):
                 - 1: recompute only diabatic Hamiltonian [ default ]
                 - 2: recompute only adiabatic Hamiltonian
 
+            * **dyn_params["ham_update_use_numpy"]** ( int ): Format of the matrix-valued properties
+                returned by the Python Hamiltonian model
+
+                - 0: Libra CMATRIX objects and lists of CMATRIX objects [ default ]
+                - 1: NumPy arrays and packed three-dimensional derivative arrays
+
             * **dyn_params["ham_transform_method"]** ( int ): How to transform the Hamiltonians between
                 representations
 
@@ -814,6 +820,7 @@ def run_dynamics(dyn_var, _dyn_params, ham, compute_model, _model_params, rnd):
     # Create copies of the input dynamical variables, so we could run several such
     # functions with the same input variables without worries that they will be altered
     # inside of each other
+    #sys.exit(0)
 
     #model_params = dict(_model_params)
     model_params = copy.deepcopy(_model_params)
@@ -825,7 +832,8 @@ def run_dynamics(dyn_var, _dyn_params, ham, compute_model, _model_params, rnd):
     critical_params = []
     default_params = {}
     # ================= Computing Hamiltonian-related properties ====================
-    default_params.update({"rep_tdse": 1, "ham_update_method": 1, "ham_transform_method": 1,
+    default_params.update({"rep_tdse": 1, "ham_update_method": 1, "ham_update_use_numpy": 0,
+                           "ham_transform_method": 1,
                            "rep_sh": 1, "rep_lz": 0, "rep_force": 1,
                            "force_method": 1, "enforce_state_following": 0, "enforced_state_index": 0,
                            "time_overlap_method": 0, "nac_update_method": 1, "nac_algo": 0,
@@ -1044,12 +1052,26 @@ def run_dynamics(dyn_var, _dyn_params, ham, compute_model, _model_params, rnd):
         dyn_var.allocate_kcrpmd()
 
     ham_aux = nHamiltonian(ham)
+    ham_aux.copy_content(ham);
+
+    prms = dyn_control_params();
+    prms.set_parameters(dyn_params);
+
+    # Copy diabatic-to-adiabatic basis transformation to the dynamical variable
+    dyn_var.update_basis_transform(ham)
+
+    # Recompute the orthogonalized reprojection matrices, stored in
+    # dyn_var.proj_adi this calculaitons used ham.children[i].time_overlap
+    # matrix, updated in the previous step
+    update_proj_adi(prms, dyn_var, ham, ham_aux)
+    update_forces(prms, dyn_var, ham)
 
     # Do the propagation
     for i in range(nsteps):
         # Energies
         Ekin, Epot, Etot, dEkin, dEpot, dEtot = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         Etherm, E_NHC = 0.0, 0.0
+        #print("Saving data for step ", i)
         save.save_tsh_data_1234_new(_savers, dyn_params, i, dyn_var, ham)
 
         # ============ Propagate ===========
@@ -1164,9 +1186,9 @@ def generic_recipe(_dyn_params, compute_model, _model_params, _init_elec, _init_
     # Initialize nuclear variables
     dyn_var.init_nuclear_dyn_var(init_nucl, rnd)
 
-    # print("Initial coordinates")
+    #print("Initial coordinates")
     # dyn_var.get_coords().show_matrix()
-    # sys.exit(0)
+    #sys.exit(0)
 
     # Initialize electronic variables
     dyn_var.init_amplitudes(init_elec, rnd)
@@ -1191,7 +1213,7 @@ def generic_recipe(_dyn_params, compute_model, _model_params, _init_elec, _init_
     # the transformation matrices to convert amplitudes between the representations
     dyn_params1 = dict(dyn_params)
 
-    # sys.exit(0)
+    #sys.exit(0)
     if (dyn_params["ham_update_method"] == 2):
         pass
         # update_Hamiltonian_variables( dyn_params1, dyn_var, ham, ham, compute_model, model_params1, 0)
@@ -1206,15 +1228,16 @@ def generic_recipe(_dyn_params, compute_model, _model_params, _init_elec, _init_
         # sys.exit(0)
         update_Hamiltonian_variables(dyn_params1, dyn_var, ham, ham, compute_model, model_params1, 1)
 
-    # sys.exit(0)
+    #sys.exit(0)
 
     # Update internal dynamical variables using the computed properties of the Hamiltonian objects
     # Set up the "rep_tdse" variable here to the representation that coinsides with the initial representation
     # of electronic variables - this will convert the amplitudes to the proper representation
     dyn_var.update_basis_transform(ham)
     dyn_var.update_amplitudes({"rep_tdse": init_elec["rep"]}, ham)
+    #sys.exit(0)
     dyn_var.update_density_matrix(dyn_params, ham, 1)
-
+    #sys.exit(0)
     if dyn_params["rep_sh"] == 1:
         dyn_var.init_active_states(init_elec, rnd)
     elif dyn_params["rep_sh"] == 0:
@@ -1231,7 +1254,7 @@ def generic_recipe(_dyn_params, compute_model, _model_params, _init_elec, _init_
 
     # print("Initial diabatic DM")
     # dyn_var.get_dm_dia(0).show_matrix()
-
+    #sys.exit(0)
     if dyn_params["rep_sh"] == 1:
         print("Active states (adiabatic)")
         print(Cpp2Py(dyn_var.act_states))
@@ -1249,6 +1272,7 @@ def generic_recipe(_dyn_params, compute_model, _model_params, _init_elec, _init_
         print(Cpp2Py(pops_sh0))
 
     # Finally, start the dynamics calculations
+    #sys.exit(0)
     res = run_dynamics(dyn_var, dyn_params, ham, compute_model, model_params, rnd)
     return res
 

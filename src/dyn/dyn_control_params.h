@@ -73,8 +73,18 @@ class dyn_control_params{
   */
   int ham_update_method;
 
+  /**
+   Selects how matrix-valued properties returned by the Python Hamiltonian
+   model are transferred to nHamiltonian storage.
 
-  /** 
+   Options:
+     - 0: Libra CMATRIX objects and lists of CMATRIX objects [ default ]
+     - 1: NumPy arrays and packed three-dimensional derivative arrays
+  */
+  int ham_update_use_numpy;
+
+
+  /**
    How to transform the Hamiltonians between representations
 
    Options:
@@ -266,6 +276,7 @@ class dyn_control_params{
       - 32: experimental stochastic algorithms with all permutations (too expensive)
       - 33: the improved stochastic algorithm with good scaling and performance, on par with the mincost
       - 4: new, experimental force-based tracking
+      - 5: SVD-reformulated LD approach of Granucci and Persico
 
 
   */
@@ -285,6 +296,18 @@ class dyn_control_params{
       - 1: prints extra details on what the algorithm is doing, for debugging
   */
   int MK_verbosity;
+
+  /**
+    Choice of the scaling function for the cost matrix in the Munkres-Kuhn (Hungarian) algorithm
+
+    Options:
+      - 0 : exp(- alpha^2 * |dE_ij|^2 )  [default]
+      - 1 : exp(- alpha * |dE_ij| )
+      - 2 : exp(-alpha * max(dE_ij, 0) )
+      - anything else:  1  - no scaling 
+
+  */
+  int MK_scaling_function;
 
   /**
     A swtich for stochastic reordering algorithm 3 to choose what happens when an acceptable permutation isn't generated in the set number of attempts:
@@ -563,7 +586,7 @@ class dyn_control_params{
       - 6: MQCXF
       - 7: DISH, rev2023
       - 8: diabatic IDA, experimental
-      - 9: simple decoherence, experimental
+      - 9: SCOTSH = state coherence transfer TSH (experimental)
 
   */
   double decoherence_algo;
@@ -775,6 +798,17 @@ class dyn_control_params{
 
   */
   int use_td_width;
+
+
+  /**
+    For SCOTSH: 
+    Gap correlation time - to control the calculation of decoherence rates via the running-average of the 
+    the energy gap fluctuations 
+
+    Should be multiples of integration time-step dt.
+    [ units: a.u. of time, default: 41.0 a.u. = 1 fs ]
+  */
+  double gap_correlation_time;
 
 
   ///===============================================================================

@@ -52,6 +52,10 @@ void update_Hamiltonian_variables(dyn_control_params &prms,
        - 1: recompute only diabatic Hamiltonian [ default ]
        - 2: recompute only adiabatic Hamiltonian
 
+    ham_update_use_numpy:
+       - 0: the Python model returns Libra CMATRIX objects [ default ]
+       - 1: the Python model returns NumPy arrays
+
     ham_transform_method:
        - 0: don't do any transforms
        - 1: diabatic->adiabatic according to internal diagonalization [ default
@@ -95,10 +99,18 @@ void update_Hamiltonian_variables(dyn_control_params &prms,
       //      cout<<" "<<iM.n_cols<<"  "<<iM.n_rows<<endl;
       //      cout<<" "<<p.n_cols<<"  "<<p.n_rows<<endl;
       // exit(0);
-      ham.compute_diabatic(py_funct, q, model_params, 1);
+      if (prms.ham_update_use_numpy == 0) {
+        ham.compute_diabatic(py_funct, q, model_params, 1);
+      } else {
+        ham.compute_diabatic_numpy(py_funct, q, model_params, 1);
+      }
       //      exit(0);
     } else if (prms.ham_update_method == 2) {
-      ham.compute_adiabatic(py_funct, q, model_params, 1);
+      if (prms.ham_update_use_numpy == 0) {
+        ham.compute_adiabatic(py_funct, q, model_params, 1);
+      } else {
+        ham.compute_adiabatic_numpy(py_funct, q, model_params, 1);
+      }
     }
     //    exit(0);
     // Do the additional transformation between any reps, if needed
@@ -414,7 +426,46 @@ void update_proj_adi(dyn_control_params &prms, dyn_variables &dyn_var,
           prms, Eadi, T_new); // CMATRIX compute_projector(dyn_control_params&
                               // prms, CMATRIX& Eadi, CMATRIX& St){
       //  T_new = orthogonalized_T( T_new );
-    }
+    } else if (prms.state_tracking_algo == 5) { // This is SVD-based LD
+      CMATRIX svd_u(dyn_var.nadi, dyn_var.nadi);
+      CMATRIX svd_s(dyn_var.nadi, dyn_var.nadi);
+      CMATRIX svd_v(dyn_var.nadi, dyn_var.nadi);
+
+      BDCSVD_decomposition(P, svd_u, svd_s, svd_v); 
+      T_new = svd_u * svd_v.H();
+    }// 5 - SVD-based LD
+
+    else if (prms.state_tracking_algo == 6) { // adaptive SVD-based LD
+      CMATRIX svd_u(dyn_var.nadi, dyn_var.nadi);
+      CMATRIX svd_s(dyn_var.nadi, dyn_var.nadi);
+      CMATRIX svd_v(dyn_var.nadi, dyn_var.nadi);
+      CMATRIX f(dyn_var.nadi, dyn_var.nadi);
+      CMATRIX eye(dyn_var.nadi, dyn_var.nadi); eye.identity();
+      CMATRIX T_tilde(dyn_var.nadi, dyn_var.nadi);
+
+      BDCSVD_decomposition(P, svd_u, svd_s, svd_v);
+
+      double eps = 1e-12;
+      for(int i=0; i<dyn_var.nadi; i++){
+        double sigma_i = svd_s.get(i,i).real();
+        f.set(i, i,  sigma_i/(sigma_i + eps) );
+      }// for i
+
+      CMATRIX Proj(dyn_var.nadi, dyn_var.nadi);
+      
+      Proj = svd_v * f * svd_v.H();
+
+      T_tilde = svd_u * f * svd_v.H() + (eye - Proj);
+
+      // We are going to re-use the storage, but the meaning
+      // is different
+      BDCSVD_decomposition(T_tilde, svd_u, svd_s, svd_v);
+      T_new = svd_u * svd_v.H();
+
+      T_new = T_new.H();
+   
+
+    }// 6 adaptive SVD-based LD
 
     *dyn_var.proj_adi[itraj] = T_new;
 

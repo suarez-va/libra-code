@@ -2,7 +2,7 @@
 #
 #  Verify that Cmake is up to date
 #
-CMAKE_MINIMUM_REQUIRED(VERSION 3.12)
+CMAKE_MINIMUM_REQUIRED(VERSION 3.10)
 set (CMAKE_CXX_STANDARD 14)
 #SET(CMAKE_LEGACY_CYGWIN_WIN32 0)
 
@@ -40,8 +40,8 @@ endif()
 #  Python library
 #
 MESSAGE(STATUS "Looking for Python libraries...")
-#FIND_PACKAGE(Python3 3.6 REQUIRED COMPONENTS Interpreter Development)
-FIND_PACKAGE(Python3 3.6 REQUIRED COMPONENTS Development)
+FIND_PACKAGE(Python3 3.6 REQUIRED COMPONENTS Interpreter Development)
+#FIND_PACKAGE(Python3 3.6 REQUIRED COMPONENTS Development)
 
 #IF(Python3_FOUND)
 #  MESSAGE("Success!")
@@ -51,6 +51,33 @@ IF(NOT Python3_FOUND)
   MESSAGE(STATUS "Try using -DPython3_ROOT_DIR=\${path_to_the_python_root_dir}")
   MESSAGE(FATAL_ERROR)
 ENDIF()
+
+#if(NOT Python3_EXECUTABLE MATCHES "conda")
+#  message(FATAL_ERROR "System Python detected. Use Conda Python.")
+#endif()
+
+message(STATUS "Python executable: ${Python3_EXECUTABLE}")
+
+#if(Python3_EXECUTABLE MATCHES "^/usr/")
+#    message(FATAL_ERROR
+#        "System Python detected (${Python3_EXECUTABLE}). "
+#        "Please activate a Conda environment.")
+#endif()
+
+if(DEFINED ENV{CONDA_PREFIX})
+    file(REAL_PATH "$ENV{CONDA_PREFIX}" CONDA_PREFIX_REAL)
+    file(REAL_PATH "${Python3_EXECUTABLE}" PYTHON_REAL)
+
+    string(FIND "${PYTHON_REAL}" "${CONDA_PREFIX_REAL}" _pos)
+
+    if(_pos EQUAL -1)
+        message(FATAL_ERROR
+            "Python executable (${PYTHON_REAL}) is not inside the active "
+            "Conda environment (${CONDA_PREFIX_REAL}).")
+    endif()
+endif()
+
+
 
 MESSAGE(STATUS "Found Python libraries directory: ${Python3_LIBRARIES}")
 MESSAGE(STATUS "Found Python include directory:   ${Python3_INCLUDE_DIRS}")
@@ -69,7 +96,7 @@ SET(Boost_USE_STATIC_LIBS=OFF)
 SET(Boost_USE_MULTITHREADED=OFF)
 SET(Boost_USE_STATIC_RUNTIME=OFF)
 
-FIND_PACKAGE(Boost 1.74.0 REQUIRED COMPONENTS regex python${LIBRA_Python3_VERSION})
+FIND_PACKAGE(Boost 1.82.0 REQUIRED COMPONENTS regex python${LIBRA_Python3_VERSION})
 IF(Boost_FOUND)
   INCLUDE_DIRECTORIES("${Boost_INCLUDE_DIRS}")
 ENDIF()
@@ -95,6 +122,11 @@ if(Libint2_FOUND)
   MESSAGE(STATUS "Found libint2 include directory: ${LIBINT2_INCLUDE_DIRS}")
   INCLUDE_DIRECTORIES(Libint2::int2 Libint2::cxx Libint2::int2-cxx Libint2::impure_sh Libint2::gss Libint2::onebody_d0_l6 Libint::g12_d0_l4 Libint2::g12_d1_l4 Libint2::shared Libint2::cxx_ho Libint2::c  Libint2::eri_c4_d0_l5  Libint2::eri_c4_d1_l4)
 endif()
+
+message(STATUS "Eigen3_DIR = ${Eigen3_DIR}")
+message(STATUS "EIGEN3_INCLUDE_DIR = ${EIGEN3_INCLUDE_DIR}")
+message(STATUS "EIGEN3_INCLUDE_DIRS = ${EIGEN3_INCLUDE_DIRS}")
+message(STATUS "Eigen3_VERSION = ${Eigen3_VERSION}")
 
 
 #

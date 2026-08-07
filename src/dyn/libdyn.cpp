@@ -37,8 +37,8 @@ using namespace libelectronic;
 //using namespace librigidbody;
 using namespace libthermostat;
 using namespace libbarostat;
-using namespace libwfcgrid;
-using namespace libwfcgrid2;
+//using namespace libwfcgrid;
+//using namespace libwfcgrid2;
 //using namespace libensemble;
 using namespace libgwp;
 using namespace libheom;
@@ -63,8 +63,9 @@ void export_dyn_control_params_objects(){
       ///================= Computing Hamiltonian-related properties ====================
       .def_readwrite("rep_tdse", &dyn_control_params::rep_tdse)
 //      .def_readwrite("rep_ham", &dyn_control_params::rep_ham)
-      .def_readwrite("ham_update_method", &dyn_control_params::ham_update_method)    
-      .def_readwrite("ham_transform_method", &dyn_control_params::ham_transform_method)    
+      .def_readwrite("ham_update_method", &dyn_control_params::ham_update_method)
+      .def_readwrite("ham_update_use_numpy", &dyn_control_params::ham_update_use_numpy)
+      .def_readwrite("ham_transform_method", &dyn_control_params::ham_transform_method)
       .def_readwrite("rep_sh", &dyn_control_params::rep_sh)
       .def_readwrite("rep_lz", &dyn_control_params::rep_lz)
       .def_readwrite("rep_force", &dyn_control_params::rep_force)
@@ -79,6 +80,7 @@ void export_dyn_control_params_objects(){
       .def_readwrite("state_tracking_algo", &dyn_control_params::state_tracking_algo)
       .def_readwrite("MK_alpha", &dyn_control_params::MK_alpha)
       .def_readwrite("MK_verbosity", &dyn_control_params::MK_verbosity)
+      .def_readwrite("MK_scaling_function", &dyn_control_params::MK_scaling_function)
       .def_readwrite("convergence", &dyn_control_params::convergence)
       .def_readwrite("max_number_attempts", &dyn_control_params::max_number_attempts)
       .def_readwrite("isNBRA", &dyn_control_params::isNBRA)
@@ -125,6 +127,7 @@ void export_dyn_control_params_objects(){
       .def_readwrite("use_xf_force", &dyn_control_params::use_xf_force)
       .def_readwrite("project_out_aux", &dyn_control_params::project_out_aux)
       .def_readwrite("tp_algo", &dyn_control_params::tp_algo)
+      .def_readwrite("gap_correlation_time", &dyn_control_params::gap_correlation_time)
 
       ///================= Entanglement of trajectories ================================
       .def_readwrite("entanglement_opt", &dyn_control_params::entanglement_opt)
@@ -273,6 +276,12 @@ void export_dyn_variables_objects(){
       .def("get_q_mm", &dyn_variables::get_q_mm)
       .def("get_p_mm", &dyn_variables::get_p_mm)
       .def("get_ave_decoherence_rates", &dyn_variables::get_ave_decoherence_rates)
+      .def("get_energy_gaps", &dyn_variables::get_energy_gaps)
+      .def("get_mean_energy_gaps", &dyn_variables::get_mean_energy_gaps)
+      .def("get_energy_gaps2", &dyn_variables::get_energy_gaps2)
+      .def("get_mean_energy_gaps2", &dyn_variables::get_mean_energy_gaps2)
+      .def("get_energy_gap_fluctuations", &dyn_variables::get_energy_gap_fluctuations)
+      .def("get_energy_gap_correlations", &dyn_variables::get_energy_gap_correlations)
       .def("get_proj_adi", &dyn_variables::get_proj_adi)
       .def("get_dm_adi", expt_get_dm_adi_v1)
       .def("get_dm_adi", expt_get_dm_adi_v2)
@@ -751,7 +760,7 @@ void export_dyn_projectors_objects(){
   //============= dyn_projectors.cpp ======================
 
   vector<int> (*expt_hungarian_algorithm_v1)
-  (CMATRIX& orb_mat_inp, CMATRIX& en_mat_inp, double alpha) = &hungarian_algorithm;
+  (CMATRIX& orb_mat_inp, CMATRIX& en_mat_inp, double alpha, int scaling_function) = &hungarian_algorithm;
   def("hungarian_algorithm", expt_hungarian_algorithm_v1);
 
   CMATRIX (*expt_compute_phase_corrections_v1)(CMATRIX& S, double tol) = &compute_phase_corrections;
@@ -763,10 +772,10 @@ void export_dyn_projectors_objects(){
   vector<int> (*expt_get_reordering_v1)(CMATRIX& time_overlap) = &get_reordering;
   def("get_reordering", expt_get_reordering_v1);  
 
-  MATRIX (*expt_make_cost_mat_v1)(CMATRIX& orb_mat_inp, CMATRIX& en_mat_inp, double alpha) = &make_cost_mat;
+  MATRIX (*expt_make_cost_mat_v1)(CMATRIX& orb_mat_inp, CMATRIX& en_mat_inp, double alpha, int scaling_function) = &make_cost_mat;
   def("make_cost_mat", expt_make_cost_mat_v1);  
 
-  vector<int> (*expt_Munkres_Kuhn_v1)(CMATRIX& orb_mat_inp, CMATRIX& en_mat_inp, double alpha, int verbosity) = &Munkres_Kuhn;
+  vector<int> (*expt_Munkres_Kuhn_v1)(CMATRIX& orb_mat_inp, CMATRIX& en_mat_inp, double alpha, int verbosity, int scaling_function) = &Munkres_Kuhn;
   def("Munkres_Kuhn", expt_Munkres_Kuhn_v1);  
 
   CMATRIX (*expt_permutation2cmatrix_v1)(vector<int>& permutation) = &permutation2cmatrix;
@@ -1025,8 +1034,8 @@ void export_Dyn_objects(){
   export_Electronic_objects();
   export_Thermostat_objects();
   export_Barostat_objects();
-  export_Wfcgrid_objects();
-  export_Wfcgrid2_objects();
+  //export_Wfcgrid_objects();
+  //export_Wfcgrid2_objects();
   //export_Ensemble_objects();
   export_gwp_objects();
   export_heom_objects();

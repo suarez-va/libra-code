@@ -1,0 +1,14 @@
+# ***********************************************************
+# * Copyright (C) 2026 Alexey V. Akimov
+# * This file is distributed under the terms of the
+# * GNU General Public License as published by the
+# * Free Software Foundation; either version 3 of the
+# * License, or (at your option) any later version.
+# * http://www.gnu.org/copyleft/gpl.txt
+# ***********************************************************/
+
+from .numpy_backend import NumpyBackend
+
+backend = NumpyBackend()
+
+__all__ = ["NumpyBackend", "backend"]

@@ -38,6 +38,7 @@ dyn_control_params::dyn_control_params(){
   rep_tdse = 1;
 //  rep_ham = 0;
   ham_update_method = 1;
+  ham_update_use_numpy = 0;
   ham_transform_method = 1;
   rep_sh = 1;
   rep_lz = 0;
@@ -57,6 +58,7 @@ dyn_control_params::dyn_control_params(){
   state_tracking_algo = -1;
   MK_alpha = 0.0;
   MK_verbosity = 0;
+  MK_scaling_function = 0;
   convergence = 0;
   max_number_attempts = 100;
   min_probability_reordering = 0.0;
@@ -115,6 +117,7 @@ dyn_control_params::dyn_control_params(){
   project_out_aux = 0;
   tp_algo = 1;
   use_td_width = 0;
+  gap_correlation_time = 41.0;
 
   ///================= Entanglement of trajectories ================================
   entanglement_opt = 0;
@@ -157,6 +160,7 @@ dyn_control_params::dyn_control_params(const dyn_control_params& x){
   rep_tdse = x.rep_tdse;
 //  rep_ham = x.rep_ham;
   ham_update_method = x.ham_update_method;
+  ham_update_use_numpy = x.ham_update_use_numpy;
   ham_transform_method = x.ham_transform_method;
   rep_sh = x.rep_sh;
   rep_lz = x.rep_lz;
@@ -176,6 +180,7 @@ dyn_control_params::dyn_control_params(const dyn_control_params& x){
   state_tracking_algo = x.state_tracking_algo;
   MK_alpha = x.MK_alpha;
   MK_verbosity = x.MK_verbosity;
+  MK_scaling_function = x.MK_scaling_function;
   convergence = x.convergence;
   max_number_attempts = x.max_number_attempts;
   min_probability_reordering = x.min_probability_reordering;
@@ -233,6 +238,7 @@ dyn_control_params::dyn_control_params(const dyn_control_params& x){
   project_out_aux = x.project_out_aux;
   tp_algo = x.tp_algo;
   use_td_width = x.use_td_width;
+  gap_correlation_time = x.gap_correlation_time;
 
   ///================= Entanglement of trajectories ================================
   entanglement_opt = x.entanglement_opt;
@@ -301,7 +307,7 @@ void dyn_control_params::sanity_check(){
      state_tracking_algo==0 || state_tracking_algo==1 ||
      state_tracking_algo==2 || state_tracking_algo==21 || 
      state_tracking_algo==3 || state_tracking_algo==32 || state_tracking_algo==33 ||
-     state_tracking_algo==4){ ; ; }
+     state_tracking_algo==4 || state_tracking_algo==5  || state_tracking_algo==6 ){ ; ; }
   else{
     std::cout<<"Error in dyn_control_params::sanity_check: state_tracking_algo = "
         <<state_tracking_algo<<" is not allowed\nExiting...\n";
@@ -368,6 +374,7 @@ void dyn_control_params::set_parameters(bp::dict params){
     if(key=="rep_tdse") { rep_tdse = bp::extract<int>(params.values()[i]); }
 //    else if(key=="rep_ham") { rep_ham = bp::extract<int>(params.values()[i]);   }
     else if(key=="ham_update_method") { ham_update_method = bp::extract<int>(params.values()[i]);   }
+    else if(key=="ham_update_use_numpy") { ham_update_use_numpy = bp::extract<int>(params.values()[i]);   }
     else if(key=="ham_transform_method") { ham_transform_method = bp::extract<int>(params.values()[i]);   }
     else if(key=="rep_sh") { rep_sh = bp::extract<int>(params.values()[i]);  }
     else if(key=="rep_lz") { rep_lz = bp::extract<int>(params.values()[i]);  }
@@ -387,6 +394,7 @@ void dyn_control_params::set_parameters(bp::dict params){
     else if(key=="state_tracking_algo"){  state_tracking_algo = bp::extract<int>(params.values()[i]);  }
     else if(key=="MK_alpha") { MK_alpha = bp::extract<double>(params.values()[i]);  }
     else if(key=="MK_verbosity") { MK_verbosity = bp::extract<int>(params.values()[i]);  }
+    else if(key=="MK_scaling_function") { MK_scaling_function = bp::extract<int>(params.values()[i]);  }
     else if(key=="convergence") { convergence = bp::extract<int>(params.values()[i]);  }
     else if(key=="max_number_attempts") { max_number_attempts = bp::extract<int>(params.values()[i]);  }
     else if(key=="min_probability_reordering") { min_probability_reordering = bp::extract<double>(params.values()[i]);  }
@@ -481,6 +489,8 @@ void dyn_control_params::set_parameters(bp::dict params){
     else if(key=="project_out_aux"){ project_out_aux = bp::extract<int>(params.values()[i]); }
     else if(key=="tp_algo"){ tp_algo = bp::extract<int>(params.values()[i]); }
     else if(key=="use_td_width"){ use_td_width = bp::extract<int>(params.values()[i]); }
+
+    else if(key=="gap_correlation_time"){ gap_correlation_time = bp::extract<double>(params.values()[i]); }
 
     ///================= Entanglement of trajectories ================================
     else if(key=="entanglement_opt"){ entanglement_opt = bp::extract<int>(params.values()[i]); }
