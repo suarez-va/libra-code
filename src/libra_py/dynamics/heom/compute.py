@@ -161,9 +161,26 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
             * **dyn_params["LL"]** ( int )
                 The hierarchy level - one needs to achieve a convergence w.r.t. this parameter [ default: 10 ]
 
+            * **dyn_params["spectral_density"]** ( int )
+                Which form of the bath's spectral density to use. This selects the expansion
+                of the bath correlation function into exponentials, and hence also the number
+                of such terms. Options are:
+
+                - 0 : Debye/Drude. The expansion has KK+1 terms [ default ]
+                - 1 : Brownian oscillator. The expansion has KK+2 terms - the two poles of
+                      the spectral density, followed by KK Matsubara terms. Requires
+                      dyn_params["omega"] to be set.
+
             * **dyn_params["gamma"]** ( float )
                 The system-bath interaction ("collision") frequency, related
-                to the bath's "friction" on the system [ units: Ha,  default: 1.0/(0.1 * units.ps2au) ]
+                to the bath's "friction" on the system. For the Brownian oscillator
+                (spectral_density = 1) this is the damping of the oscillator
+                [ units: Ha,  default: 1.0/(0.1 * units.ps2au) ]
+
+            * **dyn_params["omega"]** ( float )
+                The frequency of the Brownian oscillator. Only read when
+                dyn_params["spectral_density"] is 1; ignored otherwise
+                [ units: Ha, default: 0.0 ]
 
             * **dyn_params["eta"]** ( float )
                 Reorganization energy of bath [ units: Ha, default: 2.0 * 50.0 * units.inv_cm2Ha ]
@@ -323,7 +340,9 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
     # Parameters and dimensions
     critical_params = []
     default_params = {"KK": 0, "LL": 10,
+                      "spectral_density": 0,
                       "gamma": 1.0 / (0.1 * units.ps2au),
+                      "omega": 0.0,
                       "eta": 2.0 * 50.0 * units.inv_cm2Ha,
                       "temperature": 300.0,
                       "el_phon_couplings": initialize_el_phonon_couplings(Ham.num_of_cols),
@@ -351,16 +370,89 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
     params.update({"Ham": Ham})
     nquant = Ham.num_of_cols
 
-    # ============== HEOM topology ==============
+    KK = params["KK"] if params["KK"]>=0 else 0
+    LL = params["LL"]
 
-    KK = dyn_params["KK"]
-    LL = dyn_params["LL"]
+    # ============ Bath update =====================
+    # This has to precede the construction of the hierarchy: the number of exponentials in
+    # the expansion of the bath correlation function sets the dimension of the hierarchy, and
+    # that number is a property of the bath (KK+1 terms for Drude/Debye, KK+2 for Brownian).
+    gamma_matsubara = complexList()
+    c_matsubara = complexList()
+    # TEMPORARY TESTING REMOVE
+    # gamma_matsubara.append(0.12499999998702199+0.21650635098820767j); c_matsubara.append(6.89727535253272+3.446096981579184j)
+    # gamma_matsubara.append(0.12499999999048778-0.21650635099998045j); c_matsubara.append(5.165224544962427-3.4460969815780973j)
+    # gamma_matsubara.append(6.293374726730796-6.819148639665597e-08j); c_matsubara.append(-0.0015203856623265436+4.57291366716115e-11j)
+    # TEMPORARY TESTING REMOVE
+
+    # The extended expansion is used by the truncation schemes 3 and 4 to estimate the
+    # contribution of the terms that are dropped. It is built here, once, rather than inside
+    # compute_heom_derivatives, so that it follows the selected bath and is not reconstructed
+    # on every evaluation of the derivatives.
+    more = 200
+    gamma_matsubara_ext = complexList()
+    c_matsubara_ext = complexList()
+
+    # vec_conj[k] is the index of the term whose frequency is the complex conjugate of
+    # gamma_matsubara[k]. The equations of motion need the expansion of C(t)* in the same set
+    # of exponentials as C(t), and conjugating C(t) conjugates the frequencies along with the
+    # coefficients, so the term that belongs with exp(-gamma_k t) in C(t)* is the one sitting
+    # in slot vec_conj[k]. For an expansion whose frequencies are all real this is simply the
+    # identity map. No such map is needed for the extended lists - they only ever feed
+    # compute_matsubara_sum, which is a plain sum of c_k/gamma_k.
+    if params["spectral_density"] == 0:
+        setup_bath(KK, params["eta"], params["gamma"], params["temperature"],
+                   gamma_matsubara, c_matsubara)
+        setup_bath(KK + more, params["eta"], params["gamma"], params["temperature"],
+                   gamma_matsubara_ext, c_matsubara_ext)
+        # all of the Debye/Drude frequencies are real, so every term is its own conjugate
+        vec_conj = list(range(KK + 1))
+    elif params["spectral_density"] == 1:
+        setup_bath_brownian(KK, params["eta"], params["gamma"], params["omega"], params["temperature"],
+                            gamma_matsubara, c_matsubara)
+        setup_bath_brownian(KK + more, params["eta"], params["gamma"], params["omega"], params["temperature"],
+                            gamma_matsubara_ext, c_matsubara_ext)
+        # The pairing of the two spectral-density poles depends on the damping regime, so it
+        # has to be tested for rather than assumed - the poles are gamma/2 -/+ kappa with
+        # kappa = sqrt((gamma/2)^2 - omega^2), which is real once gamma >= 2*omega and
+        # imaginary below it. Assuming they always form a conjugate pair hands the backward
+        # branch of the equations of motion the coefficients of an unrelated mode whenever the
+        # oscillator is overdamped. The KK Matsubara frequencies that follow are always real.
+        if params["gamma"] >= 2.0 * params["omega"]:
+            # overdamped: both poles are real, so each is its own conjugate
+            if params["KK"] >= 0:
+                vec_conj = list(range(KK + 2))
+            else:
+                # Gives option for KK=-1 for overdamped case where only slowest real exponential is needed
+                gamma_matsubara_tmp = complexList(); gamma_matsubara_tmp.append(gamma_matsubara[0]); gamma_matsubara = gamma_matsubara_tmp
+                c_matsubara_tmp = complexList(); c_matsubara_tmp.append(c_matsubara[0]); c_matsubara = c_matsubara_tmp
+                vec_conj = [0]
+        else:
+            # underdamped: the two poles are a complex-conjugate pair of each other
+            vec_conj = [1, 0] + list(range(2, KK + 2))
+    else:
+        raise ValueError(F"spectral_density = {params['spectral_density']} is not recognized. "
+                         F"The options are 0 (Debye/Drude) or 1 (Brownian oscillator).")
+
+    params.update({"gamma_matsubara": gamma_matsubara, "c_matsubara": c_matsubara,
+                   "gamma_matsubara_ext": gamma_matsubara_ext, "c_matsubara_ext": c_matsubara_ext,
+                   "vec_conj": Py2Cpp_int(vec_conj)})
+
+    # The number of exponentials in the expansion - KK+1 or KK+2 depending on the bath. This,
+    # not KK+1, is what indexes the Matsubara-like dimension of the hierarchy everywhere below
+    nterms = len(gamma_matsubara)
+
+    if params["verbosity"] >= 1:
+        for k in range(nterms):
+            print(F" k = {k} gamma_matsubara[{k}] = {gamma_matsubara[k]}  c_matsubara[{k}] = {c_matsubara[k]}")
+
+    # ============== HEOM topology ==============
 
     all_vectors = intList2()
     vec_plus = intList2()
     vec_minus = intList2()
 
-    gen_hierarchy(nquant * (KK + 1), LL, params["verbosity"], all_vectors, vec_plus, vec_minus)
+    gen_hierarchy(nquant * nterms, LL, params["verbosity"], all_vectors, vec_plus, vec_minus)
     params.update({"nvec": all_vectors, "nvec_plus": vec_plus, "nvec_minus": vec_minus})
 
     nn_tot = len(all_vectors)
@@ -370,22 +462,6 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
     for n in range(nn_tot):
         all_indices.append(n)
         init_nonzero.append(1)
-
-    # ============ Bath update =====================
-    gamma_matsubara = complexList()
-    c_matsubara = complexList()
-    # TEMPORARY TESTING REMOVE
-    gamma_matsubara.append(0.12499999998702199+0.21650635098820767j); c_matsubara.append(6.89727535253272+3.446096981579184j)
-    gamma_matsubara.append(0.12499999999048778-0.21650635099998045j); c_matsubara.append(5.165224544962427-3.4460969815780973j)
-    gamma_matsubara.append(6.293374726730796-6.819148639665597e-08j); c_matsubara.append(-0.0015203856623265436+4.57291366716115e-11j)
-    # TEMPORARY TESTING REMOVE
-
-    #setup_bath(KK, params["eta"], params["gamma"], params["temperature"], gamma_matsubara, c_matsubara)
-    params.update({"gamma_matsubara": gamma_matsubara, "c_matsubara": c_matsubara})
-
-    if params["verbosity"] >= 1:
-        for k in range(KK + 1):
-            print(F" k = {k} gamma_matsubara[{k}] = {gamma_matsubara[k]}  c_matsubara[{k}] = {c_matsubara[k]}")
 
     # ============= Initialization ============
 
@@ -421,8 +497,8 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
         print("Scaling factors")
         for n in range(nn_tot):
             for m in range(nquant):
-                for k in range(KK + 1):
-                    n_mk = all_vectors[n][m * (KK + 1) + k]
+                for k in range(nterms):
+                    n_mk = all_vectors[n][m * nterms + k]
                     scl = 1.0 / math.sqrt(FACTORIAL(n_mk) * FAST_POW(abs(c_matsubara[k]), n_mk))
                     print(F" n={n} m={m} k={k}  scaling_factor={scl}")
 

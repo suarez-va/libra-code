@@ -262,10 +262,10 @@ vector<int> filter(vector<CMATRIX>& rho, vector<int>& adm_list, double tolerance
 
 
 CMATRIX compute_deriv_n(int n, vector<CMATRIX>& rho, CMATRIX& Ham, vector<CMATRIX>& el_phon_coupl,
-        double eta, double temperature, 
         vector< complex<double> >& gamma_matsubara, vector< complex<double> >& c_matsubara,
+        vector<int>& vec_conj,
         int truncation_scheme, complex<double> truncation_prefactor, int do_scale, vector<int>& nonzero,
-        vector< vector<int> >& nvectors, vector< vector<int> >& vec_plus, vector< vector<int> >& vec_minus        
+        vector< vector<int> >& nvectors, vector< vector<int> >& vec_plus, vector< vector<int> >& vec_minus
         ){
 /**
 
@@ -274,15 +274,22 @@ CMATRIX compute_deriv_n(int n, vector<CMATRIX>& rho, CMATRIX& Ham, vector<CMATRI
    Parameters:
     n : the index of the ADOs
     rho : density matrices (including the auxiliary ones) of the system
-    Ham : system's Hamiltonian 
+    Ham : system's Hamiltonian
     projectors : the matrices that describe how each electronic phonon is coupled to various electronic states
-       in the simplest picture, when a phonon k is coupled to electronic state m, the matrix projectors[k] will 
+       in the simplest picture, when a phonon k is coupled to electronic state m, the matrix projectors[k] will
        contain 1.0 at the element (m,m) and zeroes everywhere else. You can of course define more general situations
        when one phonon is coupled to many states (and perhaps to their coherences)
-    eta : reorganization energy [a.u.]
-    temperature : bath temperature [ K ] 
     gamma_matsubara : Matsubara frequencies
     c_matsubara : expansion coefficients of the autocorrelation function in the Matsubara terms
+    vec_conj : vec_conj[k] is the index of the term whose frequency is the complex conjugate of
+       gamma_matsubara[k], that is, gamma_matsubara[ vec_conj[k] ] = conj( gamma_matsubara[k] ).
+       The rho_n_minus terms below need the expansion of the conjugated correlation function
+       C(t)* in the same set of exponentials as C(t) itself. Conjugating C(t) conjugates the
+       frequencies too, so the coefficient that belongs with exp(-gamma_k t) in C(t)* is
+       conj( c_matsubara[ vec_conj[k] ] ), not conj( c_matsubara[k] ). The two coincide only
+       when every gamma_matsubara[k] is real - which is the case for the Debye/Drude bath, but
+       not for the Brownian one, whose first two terms are a complex-conjugate pair. For an
+       all-real expansion this list is just the identity map [0, 1, ..., KK]
     do_truncate : a flag to control the Ihizaki-Tanimura scheme for truncation -  JPSJ 74 3131, 2005
       0 - don't truncate 
       1 - do truncate 
@@ -317,8 +324,7 @@ CMATRIX compute_deriv_n(int n, vector<CMATRIX>& rho, CMATRIX& Ham, vector<CMATRI
 
   double scaling_factor = 1.0;
   complex<double> iota(0.0, 1.0);
-  double kB = boltzmann/hartree;
- 
+
 
   if(nonzero[n]==1){
     //=============== Liouvillian =====================
@@ -413,8 +419,11 @@ CMATRIX compute_deriv_n(int n, vector<CMATRIX>& rho, CMATRIX& Ham, vector<CMATRI
 
           } 
 
+          // sum1 carries C(t), so it uses the coefficient that belongs with this exponential.
+          // sum2 carries C(t)*, whose coefficient for this same exponential lives in the slot
+          // holding the conjugate frequency - see the note on vec_conj above.
           sum1_c_rho_over_k  += scaling_factor * c_matsubara[k] * rho[nminus];
-          sum2_c_rho_over_k  += scaling_factor * std::conj(c_matsubara[k]) * rho[nminus];
+          sum2_c_rho_over_k  += scaling_factor * std::conj(c_matsubara[ vec_conj[k] ]) * rho[nminus];
         }// not filtered out
       }// a valid entry
 
@@ -457,8 +466,22 @@ CMATRIX compute_heom_derivatives(CMATRIX& RHO, bp::dict prms){
     //vector<double> gamma_matsubara;
     vector< complex<double> > gamma_matsubara;
     vector< complex<double> > c_matsubara;
+
+    // The extended expansion used by the truncation schemes 3 and 4. It can be precomputed
+    // by the caller (with whichever bath is in use) and passed in via the dictionary; if it
+    // isn't supplied, it is built below from the Drude/Debye bath, as it always used to be.
+    vector< complex<double> > gamma_matsubara_ext;
+    vector< complex<double> > c_matsubara_ext;
+    int matsubara_ext_status = 0; // becomes 2 once both lists have been read
+
     intList2 nvec, nvec_plus, nvec_minus;
     intList zero, nonzero, adm_list;
+
+    // Maps each term of the expansion onto the term holding its complex-conjugate frequency.
+    // Supplied through the dictionary; if it isn't, it is regenerated below as the identity
+    // map, which is correct for any expansion whose frequencies are all real.
+    intList vec_conj;
+    int vec_conj_status = 0;
 
     adm_list = vector<int>(nn_tot, 0);
     for(i=0;i<nn_tot; i++){ adm_list[i] = i; }
@@ -479,6 +502,8 @@ CMATRIX compute_heom_derivatives(CMATRIX& RHO, bp::dict prms){
       if(key=="temperature"){  temperature = extract<double>(prms.values()[i]); }
       if(key=="gamma_matsubara"){  gamma_matsubara = extract< complexList >(prms.values()[i]); }
       if(key=="c_matsubara"){  c_matsubara = extract< complexList >(prms.values()[i]); }
+      if(key=="gamma_matsubara_ext"){  gamma_matsubara_ext = extract< complexList >(prms.values()[i]); matsubara_ext_status++; }
+      if(key=="c_matsubara_ext"){  c_matsubara_ext = extract< complexList >(prms.values()[i]); matsubara_ext_status++; }
       if(key=="truncation_scheme"){  truncation_scheme = extract< int >(prms.values()[i]); }
       if(key=="do_scale"){  do_scale = extract< int >(prms.values()[i]); }
       if(key=="el_phon_couplings"){  
@@ -490,6 +515,7 @@ CMATRIX compute_heom_derivatives(CMATRIX& RHO, bp::dict prms){
       if(key=="nvec_minus"){ nvec_minus = extract< intList2 >(prms.values()[i]); }
       if(key=="nonzero"){  nonzero = extract< intList >(prms.values()[i]); }
       if(key=="adm_list"){  adm_list = extract< intList >(prms.values()[i]); }
+      if(key=="vec_conj"){  vec_conj = extract< intList >(prms.values()[i]); vec_conj_status = 1; }
 
       if(key=="num_threads"){ n_threads = extract<int>(prms.values()[i]); }
 
@@ -499,9 +525,32 @@ CMATRIX compute_heom_derivatives(CMATRIX& RHO, bp::dict prms){
       el_phon_couplings = initialize_el_phonon_couplings(nquant);
     }
 
+    int n_matsubara = gamma_matsubara.size();
+
+    if(vec_conj_status==0){
+      // Identity map - conj( c_matsubara[ vec_conj[k] ] ) reduces to conj( c_matsubara[k] ),
+      // which is what this code did before vec_conj was introduced, and which is correct
+      // whenever the frequencies of the expansion are all real.
+      vec_conj = vector<int>(n_matsubara, 0);
+      for(i=0; i<n_matsubara; i++){ vec_conj[i] = i; }
+    }
+    else if(vec_conj.size() != n_matsubara){
+      cout<<"ERROR in compute_heom_derivatives: vec_conj has "<<vec_conj.size()<<" entries but the\n";
+      cout<<"  expansion has "<<n_matsubara<<" terms. These must match - vec_conj[k] is the index of\n";
+      cout<<"  the term whose frequency is conj(gamma_matsubara[k]).\n";
+      exit(1);
+    }
+
     complex<double> truncation_prefactor(0.0, 0.0);
     complex<double> iota(0.0, 1.0);
     double kB = boltzmann/hartree;
+
+    // Index of the last term actually present in the expansion. This is derived from the
+    // length of the list rather than from KK, because the number of exponentials is a
+    // property of the bath: KK+1 terms for the Drude/Debye expansion, but KK+2 for the
+    // Brownian one (two poles of the spectral density plus KK Matsubara terms). For the
+    // Drude case this is identical to KK, so the behavior there is unchanged.
+    int last_matsubara = (int)gamma_matsubara.size() - 1;
 
     if(truncation_scheme==1 || truncation_scheme==2){
       // Ihizaki-Tanimura scheme for truncation
@@ -513,13 +562,13 @@ CMATRIX compute_heom_derivatives(CMATRIX& RHO, bp::dict prms){
         // 1 - according to Schulten, with real part of Matsubara terms
         // Taking the real part in the line below is really important! otherwise, the result
         // is quite erratic
-        truncation_prefactor -= std::real( compute_matsubara_sum(gamma_matsubara, c_matsubara, KK) );
+        truncation_prefactor -= std::real( compute_matsubara_sum(gamma_matsubara, c_matsubara, last_matsubara) );
       }
 
       if(truncation_scheme==2){
         // 2 - according to Schulten, but with full Matsubara terms
         // But this is how it is supposed to be
-        truncation_prefactor -= compute_matsubara_sum(gamma_matsubara, c_matsubara, KK);
+        truncation_prefactor -= compute_matsubara_sum(gamma_matsubara, c_matsubara, last_matsubara);
       }
     }
 
@@ -527,15 +576,20 @@ CMATRIX compute_heom_derivatives(CMATRIX& RHO, bp::dict prms){
       // 3 - according to Shi, with real part of Matsubara terms
       // 4 - according to Shi, but with full Matsubara terms
 
-      // This is a bit unoptimized approach to call the bath setups here
-      int more = 200;
-      int KK_ext = KK + more;
-      vector< complex<double> > gamma_matsubara_ext;
-      vector< complex<double> > c_matsubara_ext;
-      setup_bath(KK_ext, eta, gamma, temperature, gamma_matsubara_ext, c_matsubara_ext);
+      // The extended expansion is normally precomputed by the caller - see run_dynamics in
+      // libra_py/dynamics/heom/compute.py - so that it is built with whichever bath is in
+      // use, and so that it isn't rebuilt on every derivative evaluation. Only fall back to
+      // constructing it here, from the Drude/Debye bath, if it wasn't supplied.
+      if(matsubara_ext_status<2){
+        int more = 200;
+        int KK_ext = KK + more;
+        setup_bath(KK_ext, eta, gamma, temperature, gamma_matsubara_ext, c_matsubara_ext);
+      }
 
-      complex<double> sum_KK; sum_KK = compute_matsubara_sum(gamma_matsubara, c_matsubara, KK);
-      complex<double> sum_KK_ext; sum_KK_ext = compute_matsubara_sum(gamma_matsubara_ext, c_matsubara_ext, KK+more);
+      int last_matsubara_ext = (int)gamma_matsubara_ext.size() - 1;
+
+      complex<double> sum_KK; sum_KK = compute_matsubara_sum(gamma_matsubara, c_matsubara, last_matsubara);
+      complex<double> sum_KK_ext; sum_KK_ext = compute_matsubara_sum(gamma_matsubara_ext, c_matsubara_ext, last_matsubara_ext);
 
       if(truncation_scheme==3){
         truncation_prefactor = sum_KK_ext - sum_KK;
@@ -562,8 +616,8 @@ CMATRIX compute_heom_derivatives(CMATRIX& RHO, bp::dict prms){
     {
         #pragma omp for
         for(int n1=0; n1<nn_nonzero; n1++){
-            drho_unpacked[adm_list[n1]] = compute_deriv_n(adm_list[n1], rho_unpacked, Ham, el_phon_couplings, eta, temperature, 
-                gamma_matsubara, c_matsubara, truncation_scheme, truncation_prefactor, do_scale, nonzero, nvec, nvec_plus, nvec_minus);
+            drho_unpacked[adm_list[n1]] = compute_deriv_n(adm_list[n1], rho_unpacked, Ham, el_phon_couplings,
+                gamma_matsubara, c_matsubara, vec_conj, truncation_scheme, truncation_prefactor, do_scale, nonzero, nvec, nvec_plus, nvec_minus);
         }
     }
 
@@ -641,6 +695,106 @@ void setup_bath(int KK, double eta, double gamma, double temperature,
 
     complex<double> g = gamma_matsubara[k];
     c_matsubara[k] = 2*eta*kT * (gamma* g/(g*g - gamma*gamma));
+  }
+
+
+}
+
+
+
+void setup_bath_brownian(int KK, double eta, double gamma, double omega, double temperature,
+                vector< complex<double> >& gamma_matsubara, vector< complex<double> >& c_matsubara){
+/**
+  Bath correlation function for the Brownian-oscillator spectral density
+
+      J(w)/w = eta * omega^2 * gamma / ( (w^2 - omega^2)^2 + gamma^2 * w^2 )
+
+  expanded as  C(t) = sum_k c_k * exp(-gamma_k * t).
+
+  NOTE the term count: this expansion has KK+2 terms, not KK+1. The two poles of the
+  spectral density give the first two terms (indices 0 and 1), followed by KK Matsubara
+  terms (indices 2 .. KK+1). Callers must size the HEOM hierarchy from
+  gamma_matsubara.size(), not from KK+1.
+
+  KK - the number of Matsubara terms; the expansion has KK+2 terms in total
+  eta - reorganization energy scale of the bath [Ha], same convention as setup_bath() above
+  gamma - the friction/damping of the Brownian oscillator [a.u.]
+  omega - the frequency of the Brownian oscillator [a.u.]
+  temperature - the bath temperature [K]
+
+  Reference: "New Developments in Open System Quantum Dynamics", Sec. 4.3.5, Eqs. 4.91-4.93.
+
+  Two deliberate deviations from the printed equations. Both were verified numerically by
+  comparing the full C(t) built here against direct quadrature of
+
+      C(t) = (1/pi) Int_0^inf dw J(w) [ coth(beta*w/2) cos(wt) - i sin(wt) ]
+
+  which agrees to ~1e-15 in both damping regimes (see libra-tests/heom_tests):
+
+  1. The reference's "lambda" (its bath reorganization energy) is eta/2 here, so that eta
+     keeps the same meaning it has in setup_bath() above. Confirmed independently against
+     the reference's own Debye result (Eq. 4.95), which reproduces setup_bath() exactly
+     under this same mapping.
+
+  2. The Matsubara prefactor used below is 4*lambda*gamma*omega^2/beta, which is 16x the
+     lambda*gamma*omega^2/(4*beta) printed in Eq. 4.91. With the printed prefactor the
+     Matsubara terms disagree with quadrature; with this one they agree to machine
+     precision. Contour integration of the expression above gives c_k = -i*(2/beta)*J(-i*nu_k),
+     which reproduces both setup_bath() and the reference's Eq. 4.95 for the Debye case,
+     and yields this prefactor for the Brownian case.
+
+  The overdamped (Eq. 4.92) and underdamped (Eq. 4.93) forms are analytic continuations of
+  one another - using coth(ix) - 1 = -i*(cot(x) - i) together with kappa = i*zeta - so a
+  single complex-valued expression covers both regimes with no branching on the sign of
+  (gamma/2)^2 - omega^2.
+*/
+
+  int k;
+
+  complex<double> one(1.0, 0.0);
+  complex<double> iota(0.0, 1.0);
+
+  double kB = boltzmann/hartree;
+  double kT = kB * temperature;
+  double beta = 1.0/kT;
+
+  double lambda = 0.5 * eta;
+
+  // kappa = sqrt( (gamma/2)^2 - omega^2 ): real if overdamped, purely imaginary if underdamped
+  complex<double> disc( 0.25*gamma*gamma - omega*omega, 0.0 );
+  complex<double> kappa = std::sqrt(disc);
+
+  if( std::abs(kappa) < 1e-12 * omega ){
+    cout<<"ERROR in setup_bath_brownian: the critically-damped case (gamma = 2*omega) can not\n";
+    cout<<"  be represented as a sum of exponentials. Eq. 4.94 of the reference contains a\n";
+    cout<<"  t*exp(-omega*t) term, which the HEOM ansatz C(t) = sum_k c_k exp(-gamma_k t) is\n";
+    cout<<"  unable to express. Perturb gamma slightly away from 2*omega.\n";
+    cout<<"  gamma = "<<gamma<<"   2*omega = "<<2.0*omega<<endl;
+    exit(1);
+  }
+
+  c_matsubara = vector< complex<double> >(KK+2, complex<double>(0.0, 0.0) );
+  gamma_matsubara = vector< complex<double> >(KK+2, complex<double>(0.0, 0.0) );
+
+  // The two poles of the spectral density - Eqs. 4.92 / 4.93
+  complex<double> nu_minus = 0.5*gamma - kappa;
+  complex<double> nu_plus  = 0.5*gamma + kappa;
+  complex<double> pref = lambda*omega*omega/(2.0*kappa);
+
+  gamma_matsubara[0] = nu_minus;
+  gamma_matsubara[1] = nu_plus;
+
+  c_matsubara[0] =  pref * ( one/std::tan( 0.5*beta*nu_minus ) - iota );
+  c_matsubara[1] = -pref * ( one/std::tan( 0.5*beta*nu_plus  ) - iota );
+
+  // The Matsubara terms - Eq. 4.91, with the corrected prefactor (see note 2 above)
+  for(k=1; k<=KK; k++){
+
+    complex<double> nu_k( 2.0*k*M_PI*kT, 0.0 );
+
+    gamma_matsubara[k+1] = nu_k;
+    c_matsubara[k+1] = (4.0*lambda*gamma*omega*omega*kT) * nu_k
+                     / ( gamma*gamma*nu_k*nu_k - (nu_k*nu_k + omega*omega)*(nu_k*nu_k + omega*omega) );
   }
 
 

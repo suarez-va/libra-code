@@ -63,10 +63,10 @@ void export_heom_objects(){
 
   CMATRIX (*expt_compute_deriv_n_v1)
   (int n, vector<CMATRIX>& rho, CMATRIX& Ham, vector<CMATRIX>& el_phon_coupl,
-   double eta, double temperature,
    vector< complex<double> >& gamma_matsubara, vector< complex<double> >& c_matsubara,
+   vector<int>& vec_conj,
    int truncation_scheme, complex<double> truncation_prefactor, int do_scale, vector<int>& nonzero,
-   vector< vector<int> >& nvectors, vector< vector<int> >& vec_plus, vector< vector<int> >& vec_minus        
+   vector< vector<int> >& nvectors, vector< vector<int> >& vec_plus, vector< vector<int> >& vec_minus
   ) = &compute_deriv_n;
   def("compute_deriv_n", expt_compute_deriv_n_v1);
 
@@ -87,9 +87,14 @@ void export_heom_objects(){
   def("compute_matsubara_sum", expt_compute_matsubara_sum_v1);
 
   void (*expt_setup_bath_v1)
-  (int KK, double eta, double gamma, double temperature, 
+  (int KK, double eta, double gamma, double temperature,
    vector< complex<double> >& gamma_matsubara, vector< complex<double> >& c_matsubara) = &setup_bath;
   def("setup_bath", expt_setup_bath_v1);
+
+  void (*expt_setup_bath_brownian_v1)
+  (int KK, double eta, double gamma, double omega, double temperature,
+   vector< complex<double> >& gamma_matsubara, vector< complex<double> >& c_matsubara) = &setup_bath_brownian;
+  def("setup_bath_brownian", expt_setup_bath_brownian_v1);
 
 
 
