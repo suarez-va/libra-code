@@ -144,6 +144,118 @@ def transform_adm(rho, rho_scaled, aux_memory, params, direction):
         pack_mtx(aux_memory["rho_unpacked"], rho)
 
 
+def _default_params(Ham):
+    """
+    The default values of the parameters of `run_dynamics`. Shared by all of the backends
+    (see the "backend" parameter), so that they all interpret the input the same way.
+    """
+
+    return {"KK": 0, "LL": 10,
+            "spectral_density": 0,
+            "gamma": 1.0 / (0.1 * units.ps2au),
+            "omega": 0.0,
+            "eta": 2.0 * 50.0 * units.inv_cm2Ha,
+            "temperature": 300.0,
+            "el_phon_couplings": initialize_el_phonon_couplings(Ham.num_of_cols),
+
+            "dt": 0.1 * units.fs2au, "nsteps": 10, "nprint": 1,
+            "verbosity": -1, "progress_frequency": 0.1,
+
+            "truncation_scheme": 1, "do_scale": 0,
+            "adm_tolerance": 1e-6, "adm_deriv_tolerance": 1e-12,
+            "filter_after_steps": 1, "do_zeroing": 0,
+            "num_threads": 1,
+            "backend": "cpp",
+
+            "prefix": "out",
+            "hdf5_output_level": 0, "txt_output_level": 0, "mem_output_level": 3,
+            "properties_to_save": ["timestep", "time", "denmat"],
+            "use_compression": 0, "compression_level": [0, 0, 0]
+            }
+
+
+def setup_bath_expansion(params, KK):
+    """
+    Builds the expansion of the bath correlation function into exponentials,
+    C(t) = sum_k c_k * exp(-gamma_k * t), for the bath selected by params["spectral_density"]
+
+    Args:
+        params ( dictionary ): the parameters of `run_dynamics` - uses the keys "KK",
+            "spectral_density", "eta", "gamma", "omega", and "temperature"
+        KK ( int ): the number of Matsubara terms, with negative values already mapped to 0
+
+    Returns:
+        tuple: (gamma_matsubara, c_matsubara, gamma_matsubara_ext, c_matsubara_ext, vec_conj), where
+
+            * gamma_matsubara, c_matsubara ( complexList ): the frequencies and coefficients of
+              the expansion - KK+1 terms for Debye/Drude, KK+2 for the Brownian oscillator
+            * gamma_matsubara_ext, c_matsubara_ext ( complexList ): the same, with 200 more
+              Matsubara terms - used by the truncation schemes 3 and 4
+            * vec_conj ( list of ints ): vec_conj[k] is the index of the term whose frequency
+              is the complex conjugate of gamma_matsubara[k]
+
+    """
+
+    gamma_matsubara = complexList()
+    c_matsubara = complexList()
+    # TEMPORARY TESTING REMOVE
+    # gamma_matsubara.append(0.12499999998702199+0.21650635098820767j); c_matsubara.append(6.89727535253272+3.446096981579184j)
+    # gamma_matsubara.append(0.12499999999048778-0.21650635099998045j); c_matsubara.append(5.165224544962427-3.4460969815780973j)
+    # gamma_matsubara.append(6.293374726730796-6.819148639665597e-08j); c_matsubara.append(-0.0015203856623265436+4.57291366716115e-11j)
+    # TEMPORARY TESTING REMOVE
+
+    # The extended expansion is used by the truncation schemes 3 and 4 to estimate the
+    # contribution of the terms that are dropped. It is built here, once, rather than inside
+    # compute_heom_derivatives, so that it follows the selected bath and is not reconstructed
+    # on every evaluation of the derivatives.
+    more = 200
+    gamma_matsubara_ext = complexList()
+    c_matsubara_ext = complexList()
+
+    # vec_conj[k] is the index of the term whose frequency is the complex conjugate of
+    # gamma_matsubara[k]. The equations of motion need the expansion of C(t)* in the same set
+    # of exponentials as C(t), and conjugating C(t) conjugates the frequencies along with the
+    # coefficients, so the term that belongs with exp(-gamma_k t) in C(t)* is the one sitting
+    # in slot vec_conj[k]. For an expansion whose frequencies are all real this is simply the
+    # identity map. No such map is needed for the extended lists - they only ever feed
+    # compute_matsubara_sum, which is a plain sum of c_k/gamma_k.
+    if params["spectral_density"] == 0:
+        setup_bath(KK, params["eta"], params["gamma"], params["temperature"],
+                   gamma_matsubara, c_matsubara)
+        setup_bath(KK + more, params["eta"], params["gamma"], params["temperature"],
+                   gamma_matsubara_ext, c_matsubara_ext)
+        # all of the Debye/Drude frequencies are real, so every term is its own conjugate
+        vec_conj = list(range(KK + 1))
+    elif params["spectral_density"] == 1:
+        setup_bath_brownian(KK, params["eta"], params["gamma"], params["omega"], params["temperature"],
+                            gamma_matsubara, c_matsubara)
+        setup_bath_brownian(KK + more, params["eta"], params["gamma"], params["omega"], params["temperature"],
+                            gamma_matsubara_ext, c_matsubara_ext)
+        # The pairing of the two spectral-density poles depends on the damping regime, so it
+        # has to be tested for rather than assumed - the poles are gamma/2 -/+ kappa with
+        # kappa = sqrt((gamma/2)^2 - omega^2), which is real once gamma >= 2*omega and
+        # imaginary below it. Assuming they always form a conjugate pair hands the backward
+        # branch of the equations of motion the coefficients of an unrelated mode whenever the
+        # oscillator is overdamped. The KK Matsubara frequencies that follow are always real.
+        if params["gamma"] >= 2.0 * params["omega"]:
+            # overdamped: both poles are real, so each is its own conjugate
+            if params["KK"] >= 0:
+                vec_conj = list(range(KK + 2))
+            else:
+                # Gives option for KK=-1 for overdamped case where only slowest real exponential is needed
+                gamma_matsubara_tmp = complexList(); gamma_matsubara_tmp.append(gamma_matsubara[0]); gamma_matsubara = gamma_matsubara_tmp
+                c_matsubara_tmp = complexList(); c_matsubara_tmp.append(c_matsubara[0]); c_matsubara = c_matsubara_tmp
+                vec_conj = [0]
+        else:
+            # underdamped: the two poles are a complex-conjugate pair of each other
+            vec_conj = [1, 0] + list(range(2, KK + 2))
+    else:
+        raise ValueError(F"spectral_density = {params['spectral_density']} is not recognized. "
+                         F"The options are 0 (Debye/Drude) or 1 (Brownian oscillator).")
+
+    return gamma_matsubara, c_matsubara, gamma_matsubara_ext, c_matsubara_ext, vec_conj
+
+
 def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
     """
     This functions integrates the HEOM for a given system's Hamiltonian, initial conditions, and bath parameters
@@ -247,6 +359,16 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
             * **dyn_params["num_threads"]** ( int )
                 The number of OMP threads to use to parallelize the calculations [ default: 1 ]
 
+            * **dyn_params["backend"]** ( string )
+                Which implementation integrates the HEOM. Both take the same parameters and
+                produce the same output files. Options are:
+
+                - "cpp" : the C++ derivatives (compute_heom_derivatives) driven by the C++ RK4 [ default ]
+                - "numba" : Numba-compiled kernels operating on numpy arrays - see compute_numba.py.
+                  Much faster, especially for large hierarchies. Requires the `numba` package.
+                  With this backend, `rho_init` and `adm_init` may also be numpy arrays of shapes
+                  (nstates, nstates) and (nn_tot-1, nstates, nstates)
+
             =============== Parameters for saving data ================
 
             * **dyn_params["prefix"]** ( string )
@@ -335,31 +457,20 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
 
     """
 
+    # The fast backend lives in its own module and is imported only on request, so that
+    # numba remains an optional dependency
+    backend = dyn_params.get("backend", "cpp")
+    if backend == "numba":
+        from . import compute_numba
+        return compute_numba.run_dynamics(dyn_params, Ham, rho_init, adm_init)
+    elif backend != "cpp":
+        raise ValueError(F"backend = {backend} is not recognized. The options are \"cpp\" or \"numba\".")
+
     params = dict(dyn_params)
 
     # Parameters and dimensions
     critical_params = []
-    default_params = {"KK": 0, "LL": 10,
-                      "spectral_density": 0,
-                      "gamma": 1.0 / (0.1 * units.ps2au),
-                      "omega": 0.0,
-                      "eta": 2.0 * 50.0 * units.inv_cm2Ha,
-                      "temperature": 300.0,
-                      "el_phon_couplings": initialize_el_phonon_couplings(Ham.num_of_cols),
-
-                      "dt": 0.1 * units.fs2au, "nsteps": 10, "nprint": 1,
-                      "verbosity": -1, "progress_frequency": 0.1,
-
-                      "truncation_scheme": 1, "do_scale": 0,
-                      "adm_tolerance": 1e-6, "adm_deriv_tolerance": 1e-12,
-                      "filter_after_steps": 1, "do_zeroing": 0,
-                      "num_threads": 1,
-
-                      "prefix": "out",
-                      "hdf5_output_level": 0, "txt_output_level": 0, "mem_output_level": 3,
-                      "properties_to_save": ["timestep", "time", "denmat"],
-                      "use_compression": 0, "compression_level": [0, 0, 0]
-                      }
+    default_params = _default_params(Ham)
 
     comn.check_input(params, default_params, critical_params)
 
@@ -377,62 +488,7 @@ def run_dynamics(dyn_params, Ham, rho_init, adm_init=None):
     # This has to precede the construction of the hierarchy: the number of exponentials in
     # the expansion of the bath correlation function sets the dimension of the hierarchy, and
     # that number is a property of the bath (KK+1 terms for Drude/Debye, KK+2 for Brownian).
-    gamma_matsubara = complexList()
-    c_matsubara = complexList()
-    # TEMPORARY TESTING REMOVE
-    # gamma_matsubara.append(0.12499999998702199+0.21650635098820767j); c_matsubara.append(6.89727535253272+3.446096981579184j)
-    # gamma_matsubara.append(0.12499999999048778-0.21650635099998045j); c_matsubara.append(5.165224544962427-3.4460969815780973j)
-    # gamma_matsubara.append(6.293374726730796-6.819148639665597e-08j); c_matsubara.append(-0.0015203856623265436+4.57291366716115e-11j)
-    # TEMPORARY TESTING REMOVE
-
-    # The extended expansion is used by the truncation schemes 3 and 4 to estimate the
-    # contribution of the terms that are dropped. It is built here, once, rather than inside
-    # compute_heom_derivatives, so that it follows the selected bath and is not reconstructed
-    # on every evaluation of the derivatives.
-    more = 200
-    gamma_matsubara_ext = complexList()
-    c_matsubara_ext = complexList()
-
-    # vec_conj[k] is the index of the term whose frequency is the complex conjugate of
-    # gamma_matsubara[k]. The equations of motion need the expansion of C(t)* in the same set
-    # of exponentials as C(t), and conjugating C(t) conjugates the frequencies along with the
-    # coefficients, so the term that belongs with exp(-gamma_k t) in C(t)* is the one sitting
-    # in slot vec_conj[k]. For an expansion whose frequencies are all real this is simply the
-    # identity map. No such map is needed for the extended lists - they only ever feed
-    # compute_matsubara_sum, which is a plain sum of c_k/gamma_k.
-    if params["spectral_density"] == 0:
-        setup_bath(KK, params["eta"], params["gamma"], params["temperature"],
-                   gamma_matsubara, c_matsubara)
-        setup_bath(KK + more, params["eta"], params["gamma"], params["temperature"],
-                   gamma_matsubara_ext, c_matsubara_ext)
-        # all of the Debye/Drude frequencies are real, so every term is its own conjugate
-        vec_conj = list(range(KK + 1))
-    elif params["spectral_density"] == 1:
-        setup_bath_brownian(KK, params["eta"], params["gamma"], params["omega"], params["temperature"],
-                            gamma_matsubara, c_matsubara)
-        setup_bath_brownian(KK + more, params["eta"], params["gamma"], params["omega"], params["temperature"],
-                            gamma_matsubara_ext, c_matsubara_ext)
-        # The pairing of the two spectral-density poles depends on the damping regime, so it
-        # has to be tested for rather than assumed - the poles are gamma/2 -/+ kappa with
-        # kappa = sqrt((gamma/2)^2 - omega^2), which is real once gamma >= 2*omega and
-        # imaginary below it. Assuming they always form a conjugate pair hands the backward
-        # branch of the equations of motion the coefficients of an unrelated mode whenever the
-        # oscillator is overdamped. The KK Matsubara frequencies that follow are always real.
-        if params["gamma"] >= 2.0 * params["omega"]:
-            # overdamped: both poles are real, so each is its own conjugate
-            if params["KK"] >= 0:
-                vec_conj = list(range(KK + 2))
-            else:
-                # Gives option for KK=-1 for overdamped case where only slowest real exponential is needed
-                gamma_matsubara_tmp = complexList(); gamma_matsubara_tmp.append(gamma_matsubara[0]); gamma_matsubara = gamma_matsubara_tmp
-                c_matsubara_tmp = complexList(); c_matsubara_tmp.append(c_matsubara[0]); c_matsubara = c_matsubara_tmp
-                vec_conj = [0]
-        else:
-            # underdamped: the two poles are a complex-conjugate pair of each other
-            vec_conj = [1, 0] + list(range(2, KK + 2))
-    else:
-        raise ValueError(F"spectral_density = {params['spectral_density']} is not recognized. "
-                         F"The options are 0 (Debye/Drude) or 1 (Brownian oscillator).")
+    gamma_matsubara, c_matsubara, gamma_matsubara_ext, c_matsubara_ext, vec_conj = setup_bath_expansion(params, KK)
 
     params.update({"gamma_matsubara": gamma_matsubara, "c_matsubara": c_matsubara,
                    "gamma_matsubara_ext": gamma_matsubara_ext, "c_matsubara_ext": c_matsubara_ext,

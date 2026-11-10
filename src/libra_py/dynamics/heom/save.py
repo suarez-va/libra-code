@@ -19,6 +19,7 @@
            * init_heom_savers(params, nquant)
            * save_heom_hdf5(step, saver, params, denmat)
            * save_heom_data(_savers, step, print_freq, params, rho_unpacked)
+           * save_heom_data_np(_savers, step, params, rho0, get_aux)
 
 .. moduleauthor:: Alexey V. Akimov
 
@@ -40,6 +41,7 @@ import os
 import sys
 import math
 import copy
+import h5py
 
 if sys.platform == "cygwin":
     from cyglibra_core import *
@@ -160,3 +162,90 @@ def save_heom_data(_savers, step, print_freq, params, rho_unpacked):
         prms["hdf5_output_level"] = prms["mem_output_level"]
         #save_heom_hdf5(step, _savers["mem_saver"], prms, rho_unpacked[0])
         save_heom_hdf5(step, _savers["mem_saver"], prms, rho_unpacked)
+
+
+# ===================== HEOM output from numpy arrays ====================
+# Used by the numba backend (compute_numba.py), which keeps the hierarchy in numpy arrays rather
+# than in CMATRIX objects. These functions write the arrays directly into the savers, instead of
+# going element by element through CMATRIX.get(), which matters a lot for the auxiliary density
+# matrices of large hierarchies. The datasets and their layout are identical to those written by
+# save_heom_data.
+
+def _write_np(saver, istep, data_name, value):
+    """
+    Writes `value` into the slot `istep` of the dataset `data_name` of a mem_saver or a hdf5_saver,
+    following the same rule as their save_* methods: only the datasets listed in the saver's keywords
+    are written.
+    """
+
+    if data_name not in saver.keywords:
+        return
+
+    if isinstance(saver, data_savers.mem_saver):
+        if data_name in saver.np_data.keys():
+            saver.np_data[data_name][istep] = value
+    else:
+        with h5py.File(saver.filename, "a") as f:
+            f[F"{data_name}/data"][istep] = value
+
+
+def save_heom_hdf5_np(step, saver, params, output_level, rho0, get_aux, aux_cache):
+    """
+    The numpy analog of save_heom_hdf5
+
+    Args:
+        step ( int ): the index of the current step of the dynamics
+        saver ( mem_saver or hdf5_saver ): where to write the data
+        params ( dict ): uses the keys "dt" and "nprint"
+        output_level ( int ): the output level of this saver
+        rho0 ( ndarray(nquant, nquant) ): the system's density matrix
+        get_aux ( callable ): returns the ndarray(nn_tot-1, nquant, nquant) of the auxiliary
+            density matrices - only called if they are actually going to be saved
+        aux_cache ( list ): holds the result of get_aux(), so that several savers share one call
+
+    """
+
+    nprint = params["nprint"]
+
+    if step % nprint != 0:
+        return None
+
+    istep = int(step / nprint)
+
+    if output_level >= 1:
+        _write_np(saver, istep, "timestep", nprint * istep)
+        _write_np(saver, istep, "time", nprint * istep * params["dt"])
+
+    if output_level >= 3:
+        _write_np(saver, istep, "denmat", rho0)
+
+    if output_level >= 4 and "auxdenmat" in saver.keywords:
+        if len(aux_cache) == 0:
+            aux_cache.append(get_aux())
+        _write_np(saver, istep, "auxdenmat", aux_cache[0])
+
+
+def save_heom_data_np(_savers, step, params, rho0, get_aux):
+    """
+    The numpy analog of save_heom_data
+
+    Args:
+        _savers ( dict ): the savers, as returned by init_heom_savers
+        step ( int ): the index of the current step of the dynamics
+        params ( dict ): uses the keys "dt", "nprint", "hdf5_output_level", "mem_output_level"
+        rho0 ( ndarray(nquant, nquant) ): the system's density matrix
+        get_aux ( callable ): returns the ndarray(nn_tot-1, nquant, nquant) of the auxiliary
+            density matrices; it is called at most once, and only if some saver needs them
+
+    """
+
+    aux_cache = []
+
+    if _savers["hdf5_saver"] is not None:
+        save_heom_hdf5_np(step, _savers["hdf5_saver"], params, params["hdf5_output_level"], rho0, get_aux, aux_cache)
+
+    if _savers["txt_saver"] is not None:
+        pass
+
+    if _savers["mem_saver"] is not None:
+        save_heom_hdf5_np(step, _savers["mem_saver"], params, params["mem_output_level"], rho0, get_aux, aux_cache)
